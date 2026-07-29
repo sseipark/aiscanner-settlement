@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import openpyxl
+from openpyxl.styles import Border, Side, PatternFill, Font, Alignment
 import io
 
 # 1. 웹페이지 기본 설정
@@ -26,11 +27,10 @@ def get_recent_3months(yymm_str):
         months.append(f"{str(y)[2:]}{m:02d}")
     return months
 
-# 안전하게 숫자로 변환하는 예외 처리 함수
+# 안전한 숫자 변환 함수
 def safe_float(val, default=0.0):
     try:
-        if pd.isna(val):
-            return default
+        if pd.isna(val): return default
         return float(val)
     except (ValueError, TypeError):
         return default
@@ -61,14 +61,14 @@ with col2:
 
 st.divider()
 
-# 5. 정산 처리 및 데이터 자동 채우기
+# 5. 정산 처리 및 양식 자동 확장 데이터 채우기
 st.subheader("3️⃣ 정산 실행 및 결과 다운로드")
 
 if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_container_width=True):
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 데이터를 파싱하고 템플릿 서식에 데이터를 채우는 중입니다..."):
+        with st.spinner("⏳ 데이터를 분석하고 정산 양식을 확장하여 데이터를 채우는 중입니다..."):
             try:
                 # 1) 템플릿 파일 로드
                 wb = openpyxl.load_workbook(file_tpl)
@@ -82,11 +82,10 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 ws['L5'] = f"{m3}(VAT포함)"
                 ws['N5'] = f"{m3}(VAT포함)"
                 
-                # 두 번째 시트(Sheet1)가 있으면 VLOOKUP 수식의 시트명도 변경
                 if len(wb.sheetnames) > 1:
                     ws2 = wb[wb.sheetnames[1]]
                     ws2['C2'] = f"{m3} 대리점 정산(VAT포함)"
-                    for r_idx in range(3, 30):
+                    for r_idx in range(3, 35):
                         ws2[f'C{r_idx}'] = f"=VLOOKUP(B:B,'{m3}'!B:N,12,0)"
 
                 # 2) 마스터 정산정보 파싱 (CMS 시트)
@@ -107,14 +106,12 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 store_records = []
                 unmapped_stores = []
 
-                # 당월 데이터 행순회
                 for i in range(4, len(df_cur)):
                     row = df_cur.iloc[i]
                     store_name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
                     if not store_name or store_name == '합계' or store_name == 'nan':
                         continue
 
-                    # 텍스트 예외 처리 적용하여 수량 및 금액 안전하게 추출
                     qty_val = row.iloc[15]
                     qty = int(safe_float(qty_val, 1)) if safe_float(qty_val, 1) > 0 else 1
                     
@@ -124,14 +121,12 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     cost_inc = round(cost_ex * 1.1)
                     pb_inc = round(pb_ex * 1.1)
 
-                    # 비고란에 텍스트 사유가 있었던 경우 기록
                     note = ''
-                    if isinstance(row.iloc[18], str) and not row.iloc[18].isdigit():
+                    if isinstance(row.iloc[18], str) and not str(row.iloc[18]).replace('.','',1).isdigit():
                         note = str(row.iloc[18]).strip()
-                    elif isinstance(row.iloc[19], str) and not row.iloc[19].isdigit():
+                    elif isinstance(row.iloc[19], str) and not str(row.iloc[19]).replace('.','',1).isdigit():
                         note = str(row.iloc[19]).strip()
 
-                    # 대리점 및 마스터 정보 결합
                     master_info = master_map.get(store_name, {})
                     agency = str(row.iloc[11]).strip() if pd.notna(row.iloc[11]) else master_info.get('agency', '미매핑 대리점')
                     biz_no = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else master_info.get('biz_no', '')
@@ -151,24 +146,36 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                         'note': note
                     })
 
-                # 대리점별 그룹화 정렬
                 df_stores = pd.DataFrame(store_records)
                 df_stores.sort_values(by=['agency', 'store_name'], inplace=True)
 
-                # 4) 빈 템플릿(Row 7부터)에 데이터 채워넣기
+                # 4) 데이터 채우기 (대리점명 매 행 표기 + 튀어나가는 행 양식 자동 맞춤)
                 start_row = 7
-                agency_start_row_map = {}
+                records = df_stores.to_dict('records')
+                total_records = len(records)
+                end_data_row = start_row + total_records - 1
 
-                for idx, item in enumerate(df_stores.to_dict('records')):
+                # 템플릿 기본 테두리 및 서식 참조용 셀
+                sample_cell = ws['B7']
+                thin_border = Border(
+                    left=Side(style='thin', color='000000'),
+                    right=Side(style='thin', color='000000'),
+                    top=Side(style='thin', color='000000'),
+                    bottom=Side(style='thin', color='000000')
+                )
+
+                agency_summary_map = {}
+
+                for idx, item in enumerate(records):
                     r = start_row + idx
                     agency = item['agency']
 
-                    if agency not in agency_start_row_map:
-                        ws[f'B{r}'] = agency
-                        agency_start_row_map[agency] = []
+                    if agency not in agency_summary_map:
+                        agency_summary_map[agency] = {'first_row': r, 'total_pb': 0}
+                    agency_summary_map[agency]['total_pb'] += item['pb_inc']
 
-                    agency_start_row_map[agency].append(item['pb_inc'])
-
+                    # ✨ 핵심 1: 대리점명 겹치더라도 모든 행에 표시
+                    ws[f'B{r}'] = agency
                     ws[f'C{r}'] = item['store_name']
                     ws[f'D{r}'] = item['biz_no']
                     ws[f'E{r}'] = item['sales_rep']
@@ -182,23 +189,43 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     ws[f'L{r}'] = item['cost_inc']
                     ws[f'M{r}'] = item['pb_inc']
 
-                # 대리점별 정산 합계(N열)를 첫 번째 행에 작성
-                for agency, pb_list in agency_start_row_map.items():
-                    # 해당 대리점이 시작되는 첫번째 행 번호 구하기
-                    first_r = None
-                    for check_r in range(start_row, start_row + len(df_stores)):
-                        if ws[f'B{check_r}'].value == agency:
-                            first_r = check_r
-                            break
-                    if first_r:
-                        ws[f'N{first_r}'] = sum(pb_list)
+                    # ✨ 핵심 2: 테두리 및 엑셀 스타일 모든 행에 균일하게 적용
+                    for col_idx in range(2, 15):
+                        cell = ws.cell(row=r, column=col_idx)
+                        cell.border = thin_border
+                        if col_idx in [6, 7, 8, 10, 11, 12, 13, 14]:
+                            cell.number_format = '#,##0'
 
-                # 5) 메모리 버퍼에 저장 및 다운로드
+                # 대리점 정산 합계(N열)는 대리점의 첫 번째 매장 행에 입력
+                for agency, info in agency_summary_map.items():
+                    ws[f'N{info["first_row"]}'] = info['total_pb']
+
+                # 5) 맨 아래 합계(SUM) 행 생성 및 수식 재계산
+                sum_row = end_data_row + 1
+                ws[f'B{sum_row}'] = "합계"
+                ws[f'F{sum_row}'] = f"=SUM(F7:F{end_data_row})"
+                ws[f'G{sum_row}'] = f"=SUM(G7:G{end_data_row})"
+                ws[f'H{sum_row}'] = f"=SUM(H7:H{end_data_row})"
+                ws[f'J{sum_row}'] = f"=SUM(J7:J{end_data_row})"
+                ws[f'K{sum_row}'] = f"=SUM(K7:K{end_data_row})"
+                ws[f'L{sum_row}'] = f"=SUM(L7:L{end_data_row})"
+                ws[f'M{sum_row}'] = f"=SUM(M7:M{end_data_row})"
+                ws[f'N{sum_row}'] = f"=SUM(N7:N{end_data_row})"
+
+                # 합계 행 스타일 적용
+                for col_idx in range(2, 15):
+                    cell = ws.cell(row=sum_row, column=col_idx)
+                    cell.border = thin_border
+                    cell.font = Font(bold=True)
+                    if col_idx in [6, 7, 8, 10, 11, 12, 13, 14]:
+                        cell.number_format = '#,##0'
+
+                # 6) 메모리 버퍼 저장 및 다운로드
                 output_buffer = io.BytesIO()
                 wb.save(output_buffer)
                 output_buffer.seek(0)
                 
-                st.success(f"🎉 `{m3}` 정산 내역서 데이터 채우기가 완료되었습니다!")
+                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (총 {total_records}개 매장 정산 반영)")
                 
                 if unmapped_stores:
                     st.warning(f"⚠️ 당월 데이터 미매핑 매장 ({len(unmapped_stores)}건): {', '.join(unmapped_stores)}")
