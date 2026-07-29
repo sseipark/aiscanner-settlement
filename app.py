@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import openpyxl
-from openpyxl.styles import Border, Side, PatternFill, Font, Alignment
+from openpyxl.styles import Border, Side, Font, Alignment, PatternFill
 import io
 
 # 1. 웹페이지 기본 설정
@@ -68,7 +68,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 데이터를 분석하고 정산 양식을 확장하여 데이터를 채우는 중입니다..."):
+        with st.spinner("⏳ 필터링 및 엑셀 서식을 맞추어 정산서를 생성 중입니다..."):
             try:
                 # 1) 템플릿 파일 로드
                 wb = openpyxl.load_workbook(file_tpl)
@@ -100,7 +100,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                             'sales_rep': str(row['Unnamed: 8']).strip() if pd.notna(row['Unnamed: 8']) else ''
                         }
 
-                # 3) 당월 정산 데이터 파싱
+                # 3) 당월 정산 데이터 파싱 (운영 상태가 '청구' 및 '미청구'인 매장만 선택)
                 df_cur = pd.read_excel(file_cur, sheet_name=0)
                 
                 store_records = []
@@ -109,7 +109,12 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 for i in range(4, len(df_cur)):
                     row = df_cur.iloc[i]
                     store_name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
+                    status = str(row.iloc[16]).strip() if pd.notna(row.iloc[16]) else ''
+
+                    # ✨ 핵심 1: '청구' 및 '미청구' 대상 매장만 정산에 포함 (계약해지 매장 제외)
                     if not store_name or store_name == '합계' or store_name == 'nan':
+                        continue
+                    if status not in ['청구', '미청구']:
                         continue
 
                     qty_val = row.iloc[15]
@@ -149,19 +154,17 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 df_stores = pd.DataFrame(store_records)
                 df_stores.sort_values(by=['agency', 'store_name'], inplace=True)
 
-                # 4) 데이터 채우기 (대리점명 매 행 표기 + 튀어나가는 행 양식 자동 맞춤)
+                # 4) 데이터 채우기 및 서식/행 높이 보정
                 start_row = 7
                 records = df_stores.to_dict('records')
                 total_records = len(records)
                 end_data_row = start_row + total_records - 1
 
-                # 템플릿 기본 테두리 및 서식 참조용 셀
-                sample_cell = ws['B7']
                 thin_border = Border(
-                    left=Side(style='thin', color='000000'),
-                    right=Side(style='thin', color='000000'),
-                    top=Side(style='thin', color='000000'),
-                    bottom=Side(style='thin', color='000000')
+                    left=Side(style='thin', color='B0C4DE'),
+                    right=Side(style='thin', color='B0C4DE'),
+                    top=Side(style='thin', color='B0C4DE'),
+                    bottom=Side(style='thin', color='B0C4DE')
                 )
 
                 agency_summary_map = {}
@@ -170,11 +173,13 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     r = start_row + idx
                     agency = item['agency']
 
+                    # ✨ 핵심 2: 칸 높이 고정 (22pt)
+                    ws.row_dimensions[r].height = 22
+
                     if agency not in agency_summary_map:
                         agency_summary_map[agency] = {'first_row': r, 'total_pb': 0}
                     agency_summary_map[agency]['total_pb'] += item['pb_inc']
 
-                    # ✨ 핵심 1: 대리점명 겹치더라도 모든 행에 표시
                     ws[f'B{r}'] = agency
                     ws[f'C{r}'] = item['store_name']
                     ws[f'D{r}'] = item['biz_no']
@@ -189,19 +194,26 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     ws[f'L{r}'] = item['cost_inc']
                     ws[f'M{r}'] = item['pb_inc']
 
-                    # ✨ 핵심 2: 테두리 및 엑셀 스타일 모든 행에 균일하게 적용
+                    # 셀 스타일 정렬 및 테두리 보정
                     for col_idx in range(2, 15):
                         cell = ws.cell(row=r, column=col_idx)
                         cell.border = thin_border
+                        cell.font = Font(name='맑은 고딕', size=10)
+                        if col_idx in [2, 3, 4, 5, 9]:
+                            cell.alignment = Alignment(horizontal='center', vertical='center')
+                        else:
+                            cell.alignment = Alignment(horizontal='right', vertical='center')
                         if col_idx in [6, 7, 8, 10, 11, 12, 13, 14]:
                             cell.number_format = '#,##0'
 
-                # 대리점 정산 합계(N열)는 대리점의 첫 번째 매장 행에 입력
+                # 대리점 정산 합계(N열)는 대리점의 첫 번째 매장 행에 작성
                 for agency, info in agency_summary_map.items():
                     ws[f'N{info["first_row"]}'] = info['total_pb']
 
-                # 5) 맨 아래 합계(SUM) 행 생성 및 수식 재계산
+                # 5) 맨 아래 합계(SUM) 행 생성
                 sum_row = end_data_row + 1
+                ws.row_dimensions[sum_row].height = 24
+                
                 ws[f'B{sum_row}'] = "합계"
                 ws[f'F{sum_row}'] = f"=SUM(F7:F{end_data_row})"
                 ws[f'G{sum_row}'] = f"=SUM(G7:G{end_data_row})"
@@ -212,11 +224,13 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 ws[f'M{sum_row}'] = f"=SUM(M7:M{end_data_row})"
                 ws[f'N{sum_row}'] = f"=SUM(N7:N{end_data_row})"
 
-                # 합계 행 스타일 적용
+                # 합계 행 강조 스타일
+                sum_fill = PatternFill(start_color="F2F4F8", end_color="F2F4F8", fill_type="solid")
                 for col_idx in range(2, 15):
                     cell = ws.cell(row=sum_row, column=col_idx)
                     cell.border = thin_border
-                    cell.font = Font(bold=True)
+                    cell.fill = sum_fill
+                    cell.font = Font(name='맑은 고딕', size=10, bold=True)
                     if col_idx in [6, 7, 8, 10, 11, 12, 13, 14]:
                         cell.number_format = '#,##0'
 
@@ -225,7 +239,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 wb.save(output_buffer)
                 output_buffer.seek(0)
                 
-                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (총 {total_records}개 매장 정산 반영)")
+                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (청구/미청구 총 {total_records}개 매장 반영)")
                 
                 if unmapped_stores:
                     st.warning(f"⚠️ 당월 데이터 미매핑 매장 ({len(unmapped_stores)}건): {', '.join(unmapped_stores)}")
