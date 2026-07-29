@@ -26,6 +26,15 @@ def get_recent_3months(yymm_str):
         months.append(f"{str(y)[2:]}{m:02d}")
     return months
 
+# 안전하게 숫자로 변환하는 예외 처리 함수
+def safe_float(val, default=0.0):
+    try:
+        if pd.isna(val):
+            return default
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
 # 3. 정산 대상 월 입력 섹션
 st.subheader("1️⃣ 정산 대상 월 입력")
 target_yymm = st.text_input("정산 연월 4자리를 입력하세요 (예: 7월 정산 -> 2607, 8월 정산 -> 2608)", value="2607")
@@ -38,7 +47,7 @@ else:
 
 st.divider()
 
-# 4. 파일 업로드 섹션 (필요 엑셀 파일 2개 + 양식 템플릿)
+# 4. 파일 업로드 섹션
 st.subheader("2️⃣ 엑셀 파일 업로드")
 
 col1, col2 = st.columns(2)
@@ -98,20 +107,29 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 store_records = []
                 unmapped_stores = []
 
-                # 당월 데이터 행순회 (Row 4부터 데이터 시작)
+                # 당월 데이터 행순회
                 for i in range(4, len(df_cur)):
                     row = df_cur.iloc[i]
                     store_name = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
                     if not store_name or store_name == '합계' or store_name == 'nan':
                         continue
 
-                    # 주요 데이터 추출 (VAT별도 -> VAT포함 변환)
-                    qty = row.iloc[15] if pd.notna(row.iloc[15]) else 1
-                    cost_ex = row.iloc[18] if pd.notna(row.iloc[18]) else 0
-                    pb_ex = row.iloc[19] if pd.notna(row.iloc[19]) else 0
+                    # 텍스트 예외 처리 적용하여 수량 및 금액 안전하게 추출
+                    qty_val = row.iloc[15]
+                    qty = int(safe_float(qty_val, 1)) if safe_float(qty_val, 1) > 0 else 1
                     
-                    cost_inc = round(float(cost_ex) * 1.1)
-                    pb_inc = round(float(pb_ex) * 1.1)
+                    cost_ex = safe_float(row.iloc[18], 0.0)
+                    pb_ex = safe_float(row.iloc[19], 0.0)
+                    
+                    cost_inc = round(cost_ex * 1.1)
+                    pb_inc = round(pb_ex * 1.1)
+
+                    # 비고란에 텍스트 사유가 있었던 경우 기록
+                    note = ''
+                    if isinstance(row.iloc[18], str) and not row.iloc[18].isdigit():
+                        note = str(row.iloc[18]).strip()
+                    elif isinstance(row.iloc[19], str) and not row.iloc[19].isdigit():
+                        note = str(row.iloc[19]).strip()
 
                     # 대리점 및 마스터 정보 결합
                     master_info = master_map.get(store_name, {})
@@ -129,7 +147,8 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                         'sales_rep': sales_rep,
                         'qty': qty,
                         'cost_inc': cost_inc,
-                        'pb_inc': pb_inc
+                        'pb_inc': pb_inc,
+                        'note': note
                     })
 
                 # 대리점별 그룹화 정렬
@@ -144,12 +163,11 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     r = start_row + idx
                     agency = item['agency']
 
-                    # 대리점 이름은 대리점의 첫 번째 매장 행에만 표시
                     if agency not in agency_start_row_map:
                         ws[f'B{r}'] = agency
-                        agency_start_row_map[agency] = [r]
-                    else:
-                        agency_start_row_map[agency].append(r)
+                        agency_start_row_map[agency] = []
+
+                    agency_start_row_map[agency].append(item['pb_inc'])
 
                     ws[f'C{r}'] = item['store_name']
                     ws[f'D{r}'] = item['biz_no']
@@ -157,19 +175,25 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     ws[f'F{r}'] = item['qty']
                     ws[f'G{r}'] = item['cost_inc']
                     ws[f'H{r}'] = item['pb_inc']
-                    ws[f'J{r}'] = item['cost_inc']  # 이전월1 CMS
-                    ws[f'K{r}'] = item['cost_inc']  # 이전월2 CMS
-                    ws[f'L{r}'] = item['cost_inc']  # 당월 CMS
-                    ws[f'M{r}'] = item['pb_inc']    # 당월 정산금
+                    if item['note']:
+                        ws[f'I{r}'] = item['note']
+                    ws[f'J{r}'] = item['cost_inc']
+                    ws[f'K{r}'] = item['cost_inc']
+                    ws[f'L{r}'] = item['cost_inc']
+                    ws[f'M{r}'] = item['pb_inc']
 
-                # 대리점별 최종 정산 합계금액(N열)을 첫 번째 행에 작성
-                for agency, rows in agency_start_row_map.items():
-                    first_r = rows[0]
-                    # 해당 대리점에 속한 모든 매장의 정산금(M열) 합계
-                    total_agency_pb = sum(df_stores.iloc[r - start_row]['pb_inc'] for r in rows)
-                    ws[f'N{first_r}'] = total_agency_pb
+                # 대리점별 정산 합계(N열)를 첫 번째 행에 작성
+                for agency, pb_list in agency_start_row_map.items():
+                    # 해당 대리점이 시작되는 첫번째 행 번호 구하기
+                    first_r = None
+                    for check_r in range(start_row, start_row + len(df_stores)):
+                        if ws[f'B{check_r}'].value == agency:
+                            first_r = check_r
+                            break
+                    if first_r:
+                        ws[f'N{first_r}'] = sum(pb_list)
 
-                # 5) 메모리 버퍼에 저장 후 다운로드 제공
+                # 5) 메모리 버퍼에 저장 및 다운로드
                 output_buffer = io.BytesIO()
                 wb.save(output_buffer)
                 output_buffer.seek(0)
