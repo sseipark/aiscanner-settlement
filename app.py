@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Border, Side, Font, Alignment, PatternFill
-from openpyxl.worksheet.datavalidation import DataValidation
 import copy
 import io
 
@@ -70,7 +69,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 드롭다운 목록에서 빈셀을 제거하고 정산서를 자동 채우는 중입니다..."):
+        with st.spinner("⏳ 기존 드롭다운 수식을 재설정하여 공백을 완벽하게 제거하는 중입니다..."):
             try:
                 # 1) 전월 정산 내역서 템플릿 파싱
                 wb_tpl = openpyxl.load_workbook(file_tpl, data_only=False)
@@ -267,7 +266,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 for col_letter, width in col_widths.items():
                     ws_prev.column_dimensions[col_letter].width = width
 
-                # ✨ 5) Sheet1 대리점 요약표 생성 및 드롭다운 연결 (빈셀 없는 연속 목록 생성)
+                # ✨ 5) Sheet1 대리점 요약표 정리 및 B3 기존 드롭다운 수식 수정
                 unique_agencies = list(agency_rows_map.keys())
                 agency_count = len(unique_agencies)
 
@@ -275,7 +274,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     ws2 = wb_tpl.worksheets[1]
                     ws2['C2'] = f"{m3} 대리점 정산(VAT포함)"
                     
-                    # 기존 찌꺼기 데이터 초기화 후 대리점 목록을 B3부터 연속해서 작성
+                    # Sheet1 의 B3부터 대리점 목록을 연속으로 채움
                     for r_clean in range(3, 100):
                         ws2[f'B{r_clean}'] = None
                         ws2[f'C{r_clean}'] = None
@@ -285,15 +284,16 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                         ws2[f'B{ag_r}'] = ag
                         ws2[f'C{ag_r}'] = f"=VLOOKUP(B{ag_r},'{m3}'!B:N,13,0)"
 
-                    # 맨 아래 합계 행 추가
                     sum_ag_r = 3 + agency_count
                     ws2[f'B{sum_ag_r}'] = "합계"
                     ws2[f'C{sum_ag_r}'] = f"=SUM(C3:C{sum_ag_r-1})"
 
-                    # B3 셀의 데이터 유효성 검사(드롭다운 목록) 범위를 Sheet1의 B3:B{end}로 연결
-                    dv = DataValidation(type="list", formula1=f"=Sheet1!$B$3:$B${3+agency_count-1}", allow_blank=True)
-                    ws_prev.add_data_validation(dv)
-                    dv.add("B3") # 메인 시트 B3 셀에 유효성 검사 적용
+                # ✨ 메인 시트에 존재하는 기존 Data Validation (드롭다운)의 참조 범위를 Sheet1의 공백없는 목록으로 직접 교체
+                target_range = f"Sheet1!$B$3:$B${3+agency_count-1}"
+                if len(ws_prev.data_validations.dataValidation) > 0:
+                    for dv in ws_prev.data_validations.dataValidation:
+                        dv.formula1 = target_range
+                        dv.allow_blank = True
 
                 # 6) 맨 아래 합계(SUM) 행 작성
                 sum_row = end_data_row + 1
@@ -323,7 +323,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 wb_tpl.save(output_buffer)
                 output_buffer.seek(0)
                 
-                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (드롭다운 목록 공백 제거 완료)")
+                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (드롭다운 기존 수식 수정 완료)")
                 
                 if unmapped_stores:
                     st.warning(f"⚠️ 당월 데이터 미매핑 매장 ({len(unmapped_stores)}건): {', '.join(unmapped_stores)}")
