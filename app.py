@@ -69,13 +69,13 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 원본 템플릿의 합계행 서식과 수식을 연동하여 엑셀 정산서를 생성 중입니다..."):
+        with st.spinner("⏳ 대리점 왼쪽 정렬 및 B/C열 너비 30 조율 중입니다..."):
             try:
                 # 1) 전월 정산 내역서 템플릿 파싱
                 wb_tpl = openpyxl.load_workbook(file_tpl, data_only=False)
                 ws_prev = wb_tpl.worksheets[0]
                 
-                # ✨ 원본 57번 행(합계 행)의 스타일(채우기 색상, 테두리, 폰트)을 미리 백업
+                # 원본 57번 행(합계 행)의 스타일 미리 백업
                 sum_sample_row = 57
                 sum_styles = {}
                 for col_i in range(2, 15):
@@ -208,14 +208,10 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     }
 
                 agency_rows_map = {}
-                max_store_len = 13
 
                 for idx, item in enumerate(records):
                     r = start_row + idx
                     agency = item['agency']
-
-                    if len(item['store_name']) > max_store_len:
-                        max_store_len = len(item['store_name'])
 
                     if agency not in agency_rows_map:
                         agency_rows_map[agency] = []
@@ -235,14 +231,20 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     ws_prev[f'L{r}'] = item['val_l']
                     ws_prev[f'M{r}'] = item['pb_inc']
 
-                    # 일반 데이터행 스타일 복사 적용
+                    # 일반 데이터행 스타일 적용
                     for col_idx in range(2, 15):
                         cell = ws_prev.cell(row=r, column=col_idx)
                         st_dict = sample_styles[col_idx]
                         cell.font = copy.copy(st_dict['font'])
                         cell.border = copy.copy(st_dict['border'])
                         cell.fill = copy.copy(st_dict['fill'])
-                        cell.alignment = copy.copy(st_dict['alignment'])
+                        
+                        # ✨ 대리점(B열)은 왼쪽 정렬(left), 나머지는 기존 스타일 유지
+                        if col_idx == 2:
+                            cell.alignment = Alignment(horizontal='left', vertical='center')
+                        else:
+                            cell.alignment = copy.copy(st_dict['alignment'])
+
                         if col_idx in [6, 7, 8, 10, 11, 12, 13, 14] and isinstance(cell.value, (int, float)):
                             cell.number_format = '#,##0'
 
@@ -258,19 +260,31 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                         ws_prev.merge_cells(start_row=first_r, start_column=2, end_row=last_r, end_column=2)
                         ws_prev.merge_cells(start_row=first_r, start_column=14, end_row=last_r, end_column=14)
                         
-                        ws_prev.cell(first_r, 2).alignment = Alignment(horizontal='center', vertical='center')
+                        # ✨ 병합된 B열(대리점명) 왼쪽 정렬 지정
+                        ws_prev.cell(first_r, 2).alignment = Alignment(horizontal='left', vertical='center')
                         ws_prev.cell(first_r, 14).alignment = Alignment(horizontal='right', vertical='center')
 
-                # 컬럼 너비 조정
+                # ✨ 컬럼 너비 보정 (B열 대리점 & C열 매장명 너비 30 고정)
                 col_widths = {
-                    'A': 3.5, 'B': 22.0, 'C': max(30.0, max_store_len * 1.8),
-                    'D': 13.0, 'E': 9.0, 'F': 12.0, 'G': 13.0, 'H': 13.0,
-                    'I': 32.0, 'J': 13.0, 'K': 13.0, 'L': 13.0, 'M': 13.0, 'N': 13.0
+                    'A': 3.5, 
+                    'B': 30.0,  # 대리점 너비 30
+                    'C': 30.0,  # 매장명 너비 30
+                    'D': 13.0, 
+                    'E': 9.0, 
+                    'F': 12.0, 
+                    'G': 13.0, 
+                    'H': 13.0,
+                    'I': 32.0, 
+                    'J': 13.0, 
+                    'K': 13.0, 
+                    'L': 13.0, 
+                    'M': 13.0, 
+                    'N': 13.0
                 }
                 for col_letter, width in col_widths.items():
                     ws_prev.column_dimensions[col_letter].width = width
 
-                # ✨ 5) 맨 아래 합계(SUM) 행 생성 및 원본 합계 스타일 100% 복사
+                # 5) 맨 아래 합계(SUM) 행 작성
                 sum_row = end_data_row + 1
                 
                 ws_prev[f'B{sum_row}'] = "합계"
@@ -283,7 +297,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 ws_prev[f'M{sum_row}'] = f"=SUM(M7:M{end_data_row})"
                 ws_prev[f'N{sum_row}'] = f"=SUM(N7:N{end_data_row})"
 
-                # 원본 템플릿의 57번 행 합계 스타일 그대로 입히기
                 for col_idx in range(2, 15):
                     cell = ws_prev.cell(row=sum_row, column=col_idx)
                     st_sum = sum_styles[col_idx]
@@ -299,7 +312,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 wb_tpl.save(output_buffer)
                 output_buffer.seek(0)
                 
-                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (합계 행 테두리, 채우기색 및 SUM 수식 복원 완료)")
+                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (대리점 왼쪽정렬 & 대리점/매장명 열너비 30 반영)")
                 
                 if unmapped_stores:
                     st.warning(f"⚠️ 당월 데이터 미매핑 매장 ({len(unmapped_stores)}건): {', '.join(unmapped_stores)}")
