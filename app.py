@@ -9,7 +9,7 @@ import io
 st.set_page_config(page_title="AI스캐너 정산 자동화 시스템", page_icon="🤖", layout="centered")
 
 st.title("🤖 AI스캐너 월별 정산 자동화 시스템")
-st.markdown("당월 정산 데이터, 마스터 정보, 전월 정산서 엑셀을 올려주시면 드롭다운 공백이 제거된 깔끔한 정산서가 완성됩니다.")
+st.markdown("당월 정산 데이터, 마스터 정보, 정산 내역서 템플릿 엑셀을 올려주시면 정산서가 자동으로 완성됩니다.")
 
 st.divider()
 
@@ -58,7 +58,7 @@ with col1:
     file_master = st.file_uploader("2) 마스터 정산 정보 (`▸AI스캐너_정산정보.xlsx`)", type=["xlsx", "xls"])
 
 with col2:
-    file_tpl = st.file_uploader("3) 전월 정산서 템플릿 (`AI스캐너_정산내역_2606_수정.xlsx`)", type=["xlsx", "xls"])
+    file_tpl = st.file_uploader("3) 정산 내역서 템플릿 (`AI스캐너_정산내역_...xlsx`)", type=["xlsx", "xls"])
 
 st.divider()
 
@@ -69,9 +69,9 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 기존 드롭다운 수식을 재설정하여 공백을 완벽하게 제거하는 중입니다..."):
+        with st.spinner("⏳ 정산 내역서 템플릿에 데이터를 분석하여 자동으로 채우는 중입니다..."):
             try:
-                # 1) 전월 정산 내역서 템플릿 파싱
+                # 1) 정산 내역서 템플릿 파싱
                 wb_tpl = openpyxl.load_workbook(file_tpl, data_only=False)
                 ws_prev = wb_tpl.worksheets[0]
                 
@@ -266,7 +266,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 for col_letter, width in col_widths.items():
                     ws_prev.column_dimensions[col_letter].width = width
 
-                # ✨ 5) Sheet1 대리점 요약표 정리 및 B3 기존 드롭다운 수식 수정
+                # 5) Sheet1 대리점 요약표 정리 및 B3 드롭다운 수식 연동
                 unique_agencies = list(agency_rows_map.keys())
                 agency_count = len(unique_agencies)
 
@@ -274,7 +274,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     ws2 = wb_tpl.worksheets[1]
                     ws2['C2'] = f"{m3} 대리점 정산(VAT포함)"
                     
-                    # Sheet1 의 B3부터 대리점 목록을 연속으로 채움
                     for r_clean in range(3, 100):
                         ws2[f'B{r_clean}'] = None
                         ws2[f'C{r_clean}'] = None
@@ -288,7 +287,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     ws2[f'B{sum_ag_r}'] = "합계"
                     ws2[f'C{sum_ag_r}'] = f"=SUM(C3:C{sum_ag_r-1})"
 
-                # ✨ 메인 시트에 존재하는 기존 Data Validation (드롭다운)의 참조 범위를 Sheet1의 공백없는 목록으로 직접 교체
                 target_range = f"Sheet1!$B$3:$B${3+agency_count-1}"
                 if len(ws_prev.data_validations.dataValidation) > 0:
                     for dv in ws_prev.data_validations.dataValidation:
@@ -323,7 +321,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 wb_tpl.save(output_buffer)
                 output_buffer.seek(0)
                 
-                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (드롭다운 기존 수식 수정 완료)")
+                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다!")
                 
                 if unmapped_stores:
                     st.warning(f"⚠️ 당월 데이터 미매핑 매장 ({len(unmapped_stores)}건): {', '.join(unmapped_stores)}")
