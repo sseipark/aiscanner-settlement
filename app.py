@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Border, Side, Font, Alignment, PatternFill
+from openpyxl.worksheet.datavalidation import DataValidation
 import copy
 import io
 
@@ -9,7 +10,7 @@ import io
 st.set_page_config(page_title="AI스캐너 정산 자동화 시스템", page_icon="🤖", layout="centered")
 
 st.title("🤖 AI스캐너 월별 정산 자동화 시스템")
-st.markdown("당월 정산 데이터, 마스터 정보, 전월 정산서 엑셀을 올려주시면 회계 서식이 적용된 정산서가 완성됩니다.")
+st.markdown("당월 정산 데이터, 마스터 정보, 전월 정산서 엑셀을 올려주시면 드롭다운 공백이 제거된 깔끔한 정산서가 완성됩니다.")
 
 st.divider()
 
@@ -69,13 +70,13 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 엑셀 회계 서식을 적용하여 정산서를 생성하는 중입니다..."):
+        with st.spinner("⏳ 드롭다운 목록에서 빈셀을 제거하고 정산서를 자동 채우는 중입니다..."):
             try:
                 # 1) 전월 정산 내역서 템플릿 파싱
                 wb_tpl = openpyxl.load_workbook(file_tpl, data_only=False)
                 ws_prev = wb_tpl.worksheets[0]
                 
-                # 원본 57번 행(합계 행)의 스타일 백업
+                # 원본 57번 행(합계 행) 스타일 백업
                 sum_sample_row = 57
                 sum_styles = {}
                 for col_i in range(2, 15):
@@ -108,13 +109,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 ws_prev['K5'] = f"{m2}(VAT포함)"
                 ws_prev['L5'] = f"{m3}(VAT포함)"
                 ws_prev['N5'] = f"{m3}(VAT포함)"
-                
-                # 두 번째 시트(Sheet1 요약표) VLOOKUP 수식 업데이트
-                if len(wb_tpl.worksheets) > 1:
-                    ws2 = wb_tpl.worksheets[1]
-                    ws2['C2'] = f"{m3} 대리점 정산(VAT포함)"
-                    for r_idx in range(3, 30):
-                        ws2[f'C{r_idx}'] = f"=VLOOKUP(B:B,'{m3}'!B:N,13,0)"
 
                 # 2) 마스터 정산정보 파싱 (CMS 시트)
                 df_master_cms = pd.read_excel(file_master, sheet_name='CMS')
@@ -208,8 +202,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     }
 
                 agency_rows_map = {}
-
-                # ✨ 엑셀 회계 서식 (0일 때 - 표기)
                 accounting_format = '_(* #,##0_);_(* (#,##0);_(* "-"_);_(@_)'
 
                 for idx, item in enumerate(records):
@@ -234,7 +226,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     ws_prev[f'L{r}'] = item['val_l']
                     ws_prev[f'M{r}'] = item['pb_inc']
 
-                    # 일반 데이터행 스타일 적용
                     for col_idx in range(2, 15):
                         cell = ws_prev.cell(row=r, column=col_idx)
                         st_dict = sample_styles[col_idx]
@@ -247,7 +238,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                         else:
                             cell.alignment = copy.copy(st_dict['alignment'])
 
-                        # ✨ 숫자 및 금액 컬럼 회계 서식 적용 (0 -> '-' 변환)
                         if col_idx in [6, 7, 8, 10, 11, 12, 13, 14] and isinstance(cell.value, (int, float)):
                             cell.number_format = accounting_format
 
@@ -277,7 +267,35 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 for col_letter, width in col_widths.items():
                     ws_prev.column_dimensions[col_letter].width = width
 
-                # 5) 맨 아래 합계(SUM) 행 작성
+                # ✨ 5) Sheet1 대리점 요약표 생성 및 드롭다운 연결 (빈셀 없는 연속 목록 생성)
+                unique_agencies = list(agency_rows_map.keys())
+                agency_count = len(unique_agencies)
+
+                if len(wb_tpl.worksheets) > 1:
+                    ws2 = wb_tpl.worksheets[1]
+                    ws2['C2'] = f"{m3} 대리점 정산(VAT포함)"
+                    
+                    # 기존 찌꺼기 데이터 초기화 후 대리점 목록을 B3부터 연속해서 작성
+                    for r_clean in range(3, 100):
+                        ws2[f'B{r_clean}'] = None
+                        ws2[f'C{r_clean}'] = None
+
+                    for idx_a, ag in enumerate(unique_agencies):
+                        ag_r = 3 + idx_a
+                        ws2[f'B{ag_r}'] = ag
+                        ws2[f'C{ag_r}'] = f"=VLOOKUP(B{ag_r},'{m3}'!B:N,13,0)"
+
+                    # 맨 아래 합계 행 추가
+                    sum_ag_r = 3 + agency_count
+                    ws2[f'B{sum_ag_r}'] = "합계"
+                    ws2[f'C{sum_ag_r}'] = f"=SUM(C3:C{sum_ag_r-1})"
+
+                    # B3 셀의 데이터 유효성 검사(드롭다운 목록) 범위를 Sheet1의 B3:B{end}로 연결
+                    dv = DataValidation(type="list", formula1=f"=Sheet1!$B$3:$B${3+agency_count-1}", allow_blank=True)
+                    ws_prev.add_data_validation(dv)
+                    dv.add("B3") # 메인 시트 B3 셀에 유효성 검사 적용
+
+                # 6) 맨 아래 합계(SUM) 행 작성
                 sum_row = end_data_row + 1
                 
                 ws_prev[f'B{sum_row}'] = "합계"
@@ -300,12 +318,12 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     if col_idx in [6, 7, 8, 10, 11, 12, 13, 14]:
                         cell.number_format = accounting_format
 
-                # 6) 메모리 버퍼 저장 및 다운로드
+                # 7) 메모리 버퍼 저장 및 다운로드
                 output_buffer = io.BytesIO()
                 wb_tpl.save(output_buffer)
                 output_buffer.seek(0)
                 
-                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (회계 서식 적용: 0원 -> '-' 표기)")
+                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (드롭다운 목록 공백 제거 완료)")
                 
                 if unmapped_stores:
                     st.warning(f"⚠️ 당월 데이터 미매핑 매장 ({len(unmapped_stores)}건): {', '.join(unmapped_stores)}")
