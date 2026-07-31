@@ -13,7 +13,7 @@ st.markdown("당월 정산 데이터, 마스터 정보, 정산 내역서 템플�
 
 st.divider()
 
-# 2. 최근 3개월 연월 자동 계산 함수
+# 2. 최근 3개월 연월 자동 계산 함수 (예: 2607 -> 2605(5월), 2606(6월), 2607(7월))
 def get_recent_3months(yymm_str):
     yy = int("20" + yymm_str[:2])
     mm = int(yymm_str[2:])
@@ -42,7 +42,7 @@ target_yymm = st.text_input("정산 연월 4자리를 입력하세요 (예: 7월
 
 if target_yymm and len(target_yymm) == 4 and target_yymm.isdigit():
     m1, m2, m3 = get_recent_3months(target_yymm)
-    st.info(f"📅 **정산 적용 월:** `{m3}` | **최근 3개월 CMS 열 헤더:** `{m1}`, `{m2}`, `{m3}`")
+    st.info(f"📅 **정산 적용 월:** `{m3}` | **CMS 3개월 열 헤더:** `{m1}` (5월), `{m2}` (6월), `{m3}` (7월)")
 else:
     st.error("⚠️ 정산 연월을 숫자 4자리(예: 2607)로 바르게 입력해 주세요.")
 
@@ -69,7 +69,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 정산 내역서 템플릿에 데이터를 분석하여 자동으로 채우는 중입니다..."):
+        with st.spinner("⏳ 마스터 정산 정보의 월청구비용 및 PayBack(VAT포함) 항목을 계산하여 매핑 중입니다..."):
             try:
                 # 1) 정산 내역서 템플릿 파싱
                 wb_tpl = openpyxl.load_workbook(file_tpl, data_only=False)
@@ -101,7 +101,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                             'col_k_new': l_val if l_val is not None else ''
                         }
 
-                # 시트명 및 헤더 연월 업데이트
+                # 시트명 및 헤더 연월 업데이트 (2605: 5월, 2606: 6월, 2607: 7월)
                 ws_prev.title = m3
                 ws_prev['C2'] = f"{m3} 대리점 정산(VAT포함)"
                 ws_prev['J5'] = f"{m1}(VAT포함)"
@@ -115,10 +115,16 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 for idx, row in df_master_cms.iterrows():
                     store_name = str(row['Unnamed: 1']).strip() if pd.notna(row['Unnamed: 1']) else ''
                     if store_name and store_name != '엑셀':
+                        # 마스터 파일의 월청구비용 및 Pay Back 값 파싱
+                        cost_master = safe_float(row.iloc[10] if len(row) > 10 else 0)
+                        pb_master = safe_float(row.iloc[11] if len(row) > 11 else 0)
+                        
                         master_map[store_name] = {
                             'agency': str(row['Unnamed: 6']).strip() if pd.notna(row['Unnamed: 6']) else '',
                             'biz_no': str(row['Unnamed: 5']).strip() if pd.notna(row['Unnamed: 5']) else '',
-                            'sales_rep': str(row['Unnamed: 8']).strip() if pd.notna(row['Unnamed: 8']) else ''
+                            'sales_rep': str(row['Unnamed: 8']).strip() if pd.notna(row['Unnamed: 8']) else '',
+                            'cost_master': cost_master,
+                            'pb_master': pb_master
                         }
 
                 # 3) 당월 정산 데이터 파싱
@@ -140,9 +146,13 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     qty_val = row.iloc[15]
                     qty = int(safe_float(qty_val, 1)) if safe_float(qty_val, 1) > 0 else 1
                     
-                    cost_ex = safe_float(row.iloc[18], 0.0)
-                    pb_ex = safe_float(row.iloc[19], 0.0)
+                    # 당월 데이터 및 마스터 정보 결합
+                    master_info = master_map.get(store_name, {})
                     
+                    cost_ex = safe_float(row.iloc[18], master_info.get('cost_master', 0.0))
+                    pb_ex = safe_float(row.iloc[19], master_info.get('pb_master', 0.0))
+                    
+                    # ✨ 핵심: 월청구비용 및 Pay Back 에 VAT(10%) 포함
                     cost_inc = round(cost_ex * 1.1)
                     pb_inc = round(pb_ex * 1.1)
 
@@ -152,7 +162,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     elif isinstance(row.iloc[19], str) and not str(row.iloc[19]).replace('.','',1).isdigit():
                         note = str(row.iloc[19]).strip()
 
-                    master_info = master_map.get(store_name, {})
                     agency = str(row.iloc[11]).strip() if pd.notna(row.iloc[11]) else master_info.get('agency', '미매핑 대리점')
                     biz_no = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else master_info.get('biz_no', '')
                     sales_rep = str(row.iloc[14]).strip() if pd.notna(row.iloc[14]) else master_info.get('sales_rep', '')
