@@ -13,7 +13,7 @@ st.markdown("당월 정산 데이터, 마스터 정보, 정산 내역서 템플�
 
 st.divider()
 
-# 2. 최근 3개월 연월 자동 계산 함수 (예: 2607 -> 2605(5월), 2606(6월), 2607(7월))
+# 2. 최근 3개월 연월 자동 계산 함수 (2607 -> 2605: 5월, 2606: 6월, 2607: 7월)
 def get_recent_3months(yymm_str):
     yy = int("20" + yymm_str[:2])
     mm = int(yymm_str[2:])
@@ -28,7 +28,7 @@ def get_recent_3months(yymm_str):
         months.append(f"{str(y)[2:]}{m:02d}")
     return months
 
-# 안전한 숫자 변환 함수
+# 안전한 숫자 변환 및 VAT 10% 포함 계산 함수
 def safe_float(val, default=0.0):
     try:
         if pd.isna(val): return default
@@ -36,13 +36,23 @@ def safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
+def calc_vat_inc(val, default_inc=0):
+    if pd.isna(val) or str(val).strip() == '':
+        return default_inc
+    if isinstance(val, str) and not str(val).replace('.','',1).isdigit():
+        return str(val).strip()
+    f_val = safe_float(val, -1)
+    if f_val < 0:
+        return str(val).strip()
+    return round(f_val * 1.1)
+
 # 3. 정산 대상 월 입력 섹션
 st.subheader("1️⃣ 정산 대상 월 입력")
 target_yymm = st.text_input("정산 연월 4자리를 입력하세요 (예: 7월 정산 -> 2607, 8월 정산 -> 2608)", value="2607")
 
 if target_yymm and len(target_yymm) == 4 and target_yymm.isdigit():
     m1, m2, m3 = get_recent_3months(target_yymm)
-    st.info(f"📅 **정산 적용 월:** `{m3}` | **CMS 3개월 열 헤더:** `{m1}` (5월), `{m2}` (6월), `{m3}` (7월)")
+    st.info(f"📅 **정산 적용 월:** `{m3}` | **CMS 3개월 열 매핑:** `2605`(5월), `2606`(6월), `2607`(7월)")
 else:
     st.error("⚠️ 정산 연월을 숫자 4자리(예: 2607)로 바르게 입력해 주세요.")
 
@@ -69,7 +79,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 마스터 정산 정보의 월청구비용 및 PayBack(VAT포함) 항목을 계산하여 매핑 중입니다..."):
+        with st.spinner("⏳ 2605(5월), 2606(6월), 2607(7월) CMS 데이터를 각각 연동 중입니다..."):
             try:
                 # 1) 정산 내역서 템플릿 파싱
                 wb_tpl = openpyxl.load_workbook(file_tpl, data_only=False)
@@ -88,20 +98,20 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                         'number_format': s_cell.number_format
                     }
 
-                # 이전달 CMS 이월 상태값 연동 맵 생성
+                # 전월 정산서상 텍스트 비고 백업
                 prev_history_map = {}
                 for r in range(7, ws_prev.max_row + 1):
                     store_val = ws_prev.cell(r, 3).value
                     if store_val and str(store_val).strip() != '합계':
                         store_name = str(store_val).strip()
-                        k_val = ws_prev.cell(r, 11).value # 전월 K열
-                        l_val = ws_prev.cell(r, 12).value # 전월 L열
+                        k_val = ws_prev.cell(r, 11).value
+                        l_val = ws_prev.cell(r, 12).value
                         prev_history_map[store_name] = {
                             'col_j_new': k_val if k_val is not None else '',
                             'col_k_new': l_val if l_val is not None else ''
                         }
 
-                # 시트명 및 헤더 연월 업데이트 (2605: 5월, 2606: 6월, 2607: 7월)
+                # 시트명 및 헤더 연월 업데이트
                 ws_prev.title = m3
                 ws_prev['C2'] = f"{m3} 대리점 정산(VAT포함)"
                 ws_prev['J5'] = f"{m1}(VAT포함)"
@@ -115,7 +125,6 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 for idx, row in df_master_cms.iterrows():
                     store_name = str(row['Unnamed: 1']).strip() if pd.notna(row['Unnamed: 1']) else ''
                     if store_name and store_name != '엑셀':
-                        # 마스터 파일의 월청구비용 및 Pay Back 값 파싱
                         cost_master = safe_float(row.iloc[10] if len(row) > 10 else 0)
                         pb_master = safe_float(row.iloc[11] if len(row) > 11 else 0)
                         
@@ -127,7 +136,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                             'pb_master': pb_master
                         }
 
-                # 3) 당월 정산 데이터 파싱
+                # 3) 당월 정산 데이터 파싱 및 5월, 6월, 7월 CMS 매핑
                 df_cur = pd.read_excel(file_cur, sheet_name=0)
                 
                 store_records = []
@@ -146,13 +155,11 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     qty_val = row.iloc[15]
                     qty = int(safe_float(qty_val, 1)) if safe_float(qty_val, 1) > 0 else 1
                     
-                    # 당월 데이터 및 마스터 정보 결합
                     master_info = master_map.get(store_name, {})
                     
                     cost_ex = safe_float(row.iloc[18], master_info.get('cost_master', 0.0))
                     pb_ex = safe_float(row.iloc[19], master_info.get('pb_master', 0.0))
                     
-                    # ✨ 핵심: 월청구비용 및 Pay Back 에 VAT(10%) 포함
                     cost_inc = round(cost_ex * 1.1)
                     pb_inc = round(pb_ex * 1.1)
 
@@ -162,16 +169,23 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     elif isinstance(row.iloc[19], str) and not str(row.iloc[19]).replace('.','',1).isdigit():
                         note = str(row.iloc[19]).strip()
 
+                    # ✨ 핵심: 2605(5월), 2606(6월), 2607(7월) CMS 값 각각 구하기
+                    m5_val = row.iloc[52] if len(row) > 52 else None # 5월 입금/과금
+                    m6_val = row.iloc[55] if len(row) > 55 else None # 6월 입금/과금
+                    m7_val = row.iloc[58] if len(row) > 58 else None # 7월 입금/과금
+
+                    prev_hist = prev_history_map.get(store_name, {})
+                    
+                    val_j = calc_vat_inc(m5_val, prev_hist.get('col_j_new', cost_inc)) # 2605(5월)
+                    val_k = calc_vat_inc(m6_val, prev_hist.get('col_k_new', cost_inc)) # 2606(6월)
+                    val_l = calc_vat_inc(m7_val, cost_inc)                           # 2607(7월)
+
                     agency = str(row.iloc[11]).strip() if pd.notna(row.iloc[11]) else master_info.get('agency', '미매핑 대리점')
                     biz_no = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else master_info.get('biz_no', '')
                     sales_rep = str(row.iloc[14]).strip() if pd.notna(row.iloc[14]) else master_info.get('sales_rep', '')
 
                     if not master_info and agency == '미매핑 대리점':
                         unmapped_stores.append(store_name)
-
-                    prev_hist = prev_history_map.get(store_name, {})
-                    val_j = prev_hist.get('col_j_new', cost_inc)
-                    val_k = prev_hist.get('col_k_new', cost_inc)
 
                     store_records.append({
                         'agency': agency,
@@ -184,7 +198,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                         'note': note,
                         'val_j': val_j,
                         'val_k': val_k,
-                        'val_l': cost_inc
+                        'val_l': val_l
                     })
 
                 df_stores = pd.DataFrame(store_records)
@@ -330,7 +344,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 wb_tpl.save(output_buffer)
                 output_buffer.seek(0)
                 
-                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다!")
+                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (2605=5월, 2606=6월, 2607=7월 매핑 적용)")
                 
                 if unmapped_stores:
                     st.warning(f"⚠️ 당월 데이터 미매핑 매장 ({len(unmapped_stores)}건): {', '.join(unmapped_stores)}")
