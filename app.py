@@ -13,7 +13,7 @@ st.markdown("당월 정산 데이터, 마스터 정보, 정산 내역서 템플�
 
 st.divider()
 
-# 2. 최근 3개월 연월 자동 계산 함수 (2607 -> 2605: 5월, 2606: 6월, 2607: 7월)
+# 2. 최근 3개월 연월 자동 계산 함수
 def get_recent_3months(yymm_str):
     yy = int("20" + yymm_str[:2])
     mm = int(yymm_str[2:])
@@ -69,9 +69,9 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
     if not file_cur or not file_master or not file_tpl:
         st.warning("⚠️ 엑셀 파일 3개를 모두 업로드한 후 실행해 주세요.")
     else:
-        with st.spinner("⏳ 5월(2605), 6월(2606), 7월(2607) CMS 출금액을 개별 분리하여 매핑 중입니다..."):
+        with st.spinner("⏳ 월청구비용과 5월, 6월, 7월 CMS 개별 실적을 정확히 구분하여 채우는 중입니다..."):
             try:
-                # 1) 전월 정산 내역서 템플릿 파싱 (전월 CMS 이월값 정확 파싱)
+                # 1) 전월 정산 내역서 템플릿 파싱 (이월값 파싱)
                 wb_tpl = openpyxl.load_workbook(file_tpl, data_only=False)
                 ws_prev = wb_tpl.worksheets[0]
                 
@@ -88,17 +88,17 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                         'number_format': s_cell.number_format
                     }
 
-                # ✨ 핵심: 전월 템플릿의 K열(2605)과 L열(2606) 데이터 그대로 추출
+                # ✨ 핵심: 템플릿의 K열(2605)과 L열(2606) 실제 값만 추출
                 prev_history_map = {}
                 for r in range(7, ws_prev.max_row + 1):
                     store_val = ws_prev.cell(r, 3).value
                     if store_val and str(store_val).strip() != '합계':
                         store_name = str(store_val).strip()
-                        k_val = ws_prev.cell(r, 11).value # 전월 템플릿의 K열 (2605/5월 값)
-                        l_val = ws_prev.cell(r, 12).value # 전월 템플릿의 L열 (2606/6월 값)
+                        k_val = ws_prev.cell(r, 11).value # 2605(5월) 실제값
+                        l_val = ws_prev.cell(r, 12).value # 2606(6월) 실제값
                         prev_history_map[store_name] = {
-                            'val_2605': k_val if k_val is not None else '',
-                            'val_2606': l_val if l_val is not None else ''
+                            'val_2605': k_val if k_val is not None else 0,
+                            'val_2606': l_val if l_val is not None else 0
                         }
 
                 # 시트명 및 헤더 연월 업데이트
@@ -159,14 +159,17 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                     elif isinstance(row.iloc[19], str) and not str(row.iloc[19]).replace('.','',1).isdigit():
                         note = str(row.iloc[19]).strip()
 
-                    # ✨ 핵심 연동: 
-                    # J열(2605) -> 전월 정산서 템플릿의 K열(2605/5월) 값
-                    # K열(2606) -> 전월 정산서 템플릿의 L열(2606/6월) 값
-                    # L열(2607) -> 당월 정산 데이터의 7월 값
+                    # ✨ 핵심 수정: 기본값으로 cost_inc를 대입하던 버그 수정
                     prev_hist = prev_history_map.get(store_name, {})
-                    val_j = prev_hist.get('val_2605', cost_inc)
-                    val_k = prev_hist.get('val_2606', cost_inc)
-                    val_l = cost_inc
+                    val_j = prev_hist.get('val_2605', 0)  # 2605 (5월 출금 실적)
+                    val_k = prev_hist.get('val_2606', 0)  # 2606 (6월 출금 실적)
+                    
+                    # 7월 출금 실적 (당월 파일의 58번째 열 / 없으면 당월 청구액)
+                    val_l_raw = row.iloc[58] if len(row) > 58 and pd.notna(row.iloc[58]) else cost_ex
+                    if isinstance(val_l_raw, str) and not str(val_l_raw).replace('.','',1).isdigit():
+                        val_l = str(val_l_raw).strip()
+                    else:
+                        val_l = round(safe_float(val_l_raw, cost_ex) * 1.1)
 
                     agency = str(row.iloc[11]).strip() if pd.notna(row.iloc[11]) else master_info.get('agency', '미매핑 대리점')
                     biz_no = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else master_info.get('biz_no', '')
@@ -332,7 +335,7 @@ if st.button("🚀 정산 내역서 자동 생성 시작", type="primary", use_c
                 wb_tpl.save(output_buffer)
                 output_buffer.seek(0)
                 
-                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (5월/6월/7월 CMS 금액 분리 반영 완료)")
+                st.success(f"🎉 `{m3}` 정산 내역서 생성이 완료되었습니다! (월별 CMS 금액 개별 분리 정상화)")
                 
                 if unmapped_stores:
                     st.warning(f"⚠️ 당월 데이터 미매핑 매장 ({len(unmapped_stores)}건): {', '.join(unmapped_stores)}")
